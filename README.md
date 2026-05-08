@@ -1,31 +1,55 @@
 # GitHub PR Auto Load More
 
-This Chrome extension adds a `Load All` button under GitHub's pull request timeline `Load more…` control.
+A Chrome extension that adds a `Load All` button to GitHub pull request timelines, so you can expand every collapsed comment with a single click instead of repeatedly hitting `Load more…`.
+
+## Why
+
+GitHub collapses long PR timelines behind a `Load more…` button that only loads one batch at a time. On busy PRs this can mean clicking the same button dozens of times before you can search the page or read every comment. This extension automates that.
 
 ## What it does
 
-On GitHub pull request pages:
+On any GitHub pull request page:
 
-- Clicking GitHub's normal `Load more…` button behaves normally and loads a single batch.
-- Clicking the extension's `Load All` button keeps clicking GitHub's `Load more…` control after each batch loads until GitHub removes it.
+- GitHub's existing `Load more…` button is left untouched and still loads a single batch when clicked.
+- A new `Load All` button is inserted beneath it. Clicking it repeatedly triggers `Load more…` until GitHub has nothing left to load.
 
-While it runs, a small status badge appears in the top-right:
+While `Load All` is running, a status badge appears in the top-right corner of the page:
 
-- Orange: `Loaded page, N left`
-- Green: `Loaded all GH comments`
+- 🟠 Orange — `Loaded page, N left`
+- 🟢 Green — `Loaded all GH comments`
 
-## Install
+The extension only injects UI on PR pages (`/<owner>/<repo>/pull/<number>`) and only acts on timeline sections that GitHub has marked as expandable.
 
-1. Open `chrome://extensions`
-2. Turn on **Developer mode**
-3. Click **Load unpacked**
-4. Select this folder:
+## Install (from source)
 
-`/Users/aigars/projects/github-load-more-extension`
+This extension is not on the Chrome Web Store. To install it locally:
 
-## Notes
+1. Clone this repository, or download it as a ZIP and extract it.
+   ```
+   git clone https://github.com/Azael05x/github-load-more-chrome-extension.git
+   ```
+2. Open `chrome://extensions` in Chrome (or any Chromium-based browser).
+3. Enable **Developer mode** in the top-right corner.
+4. Click **Load unpacked** and select the cloned/extracted folder.
+5. Reload any open GitHub PR tabs so the content script runs on them.
 
-- It only runs on `https://github.com/*`
-- `Load All` appears under GitHub's own `Load more…` button on PR timeline sections that can be expanded
-- Reload the PR page after enabling the extension if the page was already open
-# github-load-more-chrome-extension
+## Permissions
+
+The extension uses Manifest V3 and requests **no host permissions or APIs** beyond a content script that runs on `https://github.com/*`. It does not make network requests of its own — it only clicks GitHub's own `Load more…` button on your behalf.
+
+## Files
+
+- `manifest.json` — Chrome extension manifest (MV3).
+- `content.js` — All extension logic: button injection, click handling, status badge.
+
+## Contributing
+
+Issues and pull requests are welcome. If you hit a PR layout where `Load All` doesn't appear or doesn't finish, please include:
+
+- A link to the PR (or a description of its structure).
+- The browser and extension version.
+- Any errors from the DevTools console.
+
+## License
+
+MIT
