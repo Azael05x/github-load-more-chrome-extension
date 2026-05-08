@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "GitHub PR Auto Load More",
+  "version": "1.0.0",
+  "description": "Keeps loading compacted GitHub pull request timeline items until nothing is left to load.",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://github.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
