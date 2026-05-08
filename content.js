@@ -10,24 +10,41 @@ const HIDDEN_ITEMS_SELECTOR =
   `${PAGINATION_FORM_SELECTOR} ${HIDDEN_ITEMS_BUTTON_SELECTOR}`;
 const LOAD_ALL_BUTTON_ATTRIBUTE = "data-gh-pr-auto-load-all";
 const RETRY_DELAY_MS = 250;
+const MAX_RETRY_ATTEMPTS = 80;
 const TOOLTIP_ID = "gh-pr-auto-load-more-tooltip";
+const TOOLTIP_COLOR_PENDING = "#d97706";
+const TOOLTIP_COLOR_COMPLETE = "#15803d";
+const TOOLTIP_COLOR_ERROR = "#dc2626";
+const ERROR_MESSAGE = "Github Extension Failed To Inject";
+const OBSERVER_CONFIG = {
+  childList: true,
+  subtree: true,
+  attributes: true,
+  attributeFilter: ["disabled", "aria-disabled"]
+};
 
 let activeContainer = null;
 let retryTimer = null;
+let retryAttempts = 0;
 let observer = null;
 let buttonObserver = null;
+let lastTooltipMessage = null;
+let lastTooltipColor = null;
 
 function isPullRequestPage() {
   return /^\/[^/]+\/[^/]+\/pull\/\d+/.test(window.location.pathname);
 }
 
+function isButtonDisabled(button) {
+  return button.disabled || button.getAttribute("aria-disabled") === "true";
+}
+
 function getLoadMoreButton(container = document) {
-  const button = container.querySelector(LOAD_MORE_BUTTON_SELECTOR);
-  return button || null;
+  return container.querySelector(LOAD_MORE_BUTTON_SELECTOR);
 }
 
 function getLoadAllButton(form) {
-  return form?.querySelector(`[${LOAD_ALL_BUTTON_ATTRIBUTE}="true"]`) || null;
+  return form?.querySelector(`[${LOAD_ALL_BUTTON_ATTRIBUTE}="true"]`);
 }
 
 function getRemainingCount(container = document) {
@@ -55,29 +72,38 @@ function getTooltip() {
 
   tooltip = document.createElement("div");
   tooltip.id = TOOLTIP_ID;
-  tooltip.style.position = "fixed";
-  tooltip.style.top = "16px";
-  tooltip.style.right = "16px";
-  tooltip.style.zIndex = "9999";
-  tooltip.style.padding = "10px 14px";
-  tooltip.style.borderRadius = "999px";
-  tooltip.style.fontSize = "13px";
-  tooltip.style.fontWeight = "600";
-  tooltip.style.boxShadow = "0 10px 30px rgba(0, 0, 0, 0.18)";
-  tooltip.style.transition = "opacity 120ms ease";
-  tooltip.style.pointerEvents = "none";
-  tooltip.style.fontFamily =
-    '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
-  tooltip.style.opacity = "0";
+  Object.assign(tooltip.style, {
+    position: "fixed",
+    top: "16px",
+    right: "16px",
+    zIndex: "9999",
+    padding: "10px 14px",
+    borderRadius: "999px",
+    fontSize: "13px",
+    fontWeight: "600",
+    boxShadow: "0 10px 30px rgba(0, 0, 0, 0.18)",
+    transition: "opacity 120ms ease",
+    pointerEvents: "none",
+    fontFamily:
+      '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
+    opacity: "0",
+    color: "#ffffff"
+  });
   document.body.appendChild(tooltip);
   return tooltip;
 }
 
 function showTooltip(message, backgroundColor) {
+  if (lastTooltipMessage === message && lastTooltipColor === backgroundColor) {
+    return;
+  }
+
+  lastTooltipMessage = message;
+  lastTooltipColor = backgroundColor;
+
   const tooltip = getTooltip();
   tooltip.textContent = message;
   tooltip.style.backgroundColor = backgroundColor;
-  tooltip.style.color = "#ffffff";
   tooltip.style.opacity = "1";
 }
 
@@ -87,17 +113,29 @@ function hideTooltip() {
   if (tooltip) {
     tooltip.style.opacity = "0";
   }
+
+  lastTooltipMessage = null;
+  lastTooltipColor = null;
+}
+
+function reportInjectionFailure(error) {
+  console.error("[gh-pr-auto-load-more]", error);
+  try {
+    showTooltip(ERROR_MESSAGE, TOOLTIP_COLOR_ERROR);
+  } catch (tooltipError) {
+    console.error("[gh-pr-auto-load-more] tooltip render failed", tooltipError);
+  }
 }
 
 function updateTooltip(container) {
   const remainingCount = getRemainingCount(container);
 
   if (remainingCount !== null) {
-    showTooltip(`Loaded page, ${remainingCount} left`, "#d97706");
+    showTooltip(`Loaded page, ${remainingCount} left`, TOOLTIP_COLOR_PENDING);
     return;
   }
 
-  showTooltip("Loaded all GH comments", "#15803d");
+  showTooltip("Loaded all GH comments", TOOLTIP_COLOR_COMPLETE);
 }
 
 function clearRetryTimer() {
@@ -109,6 +147,7 @@ function clearRetryTimer() {
 
 function stopAutoload() {
   clearRetryTimer();
+  retryAttempts = 0;
 
   if (observer) {
     observer.disconnect();
@@ -123,10 +162,7 @@ function syncLoadAllButtonState(loadMoreButton, loadAllButton) {
     return;
   }
 
-  const isDisabled =
-    !loadMoreButton ||
-    loadMoreButton.disabled ||
-    loadMoreButton.getAttribute("aria-disabled") === "true";
+  const isDisabled = !loadMoreButton || isButtonDisabled(loadMoreButton);
 
   if (loadAllButton.disabled !== isDisabled) {
     loadAllButton.disabled = isDisabled;
@@ -155,48 +191,52 @@ function syncLoadAllButtons() {
   const forms = document.querySelectorAll(PAGINATION_FORM_SELECTOR);
 
   forms.forEach((form) => {
-    const loadMoreButton = form.querySelector(PAGINATION_BUTTON_SELECTOR);
-    const loadAllButton = getLoadAllButton(form);
+    try {
+      const loadMoreButton = form.querySelector(PAGINATION_BUTTON_SELECTOR);
+      const loadAllButton = getLoadAllButton(form);
 
-    if (!loadMoreButton) {
-      loadAllButton?.remove();
-      return;
+      if (!loadMoreButton) {
+        loadAllButton?.remove();
+        return;
+      }
+
+      if (!loadAllButton) {
+        const nextLoadAllButton = createLoadAllButton(loadMoreButton);
+        loadMoreButton.insertAdjacentElement("afterend", nextLoadAllButton);
+        syncLoadAllButtonState(loadMoreButton, nextLoadAllButton);
+        return;
+      }
+
+      if (loadAllButton.previousElementSibling !== loadMoreButton) {
+        loadMoreButton.insertAdjacentElement("afterend", loadAllButton);
+      }
+
+      syncLoadAllButtonState(loadMoreButton, loadAllButton);
+    } catch (error) {
+      reportInjectionFailure(error);
     }
-
-    if (!loadAllButton) {
-      const nextLoadAllButton = createLoadAllButton(loadMoreButton);
-      loadMoreButton.insertAdjacentElement("afterend", nextLoadAllButton);
-      syncLoadAllButtonState(loadMoreButton, nextLoadAllButton);
-      return;
-    }
-
-    if (loadAllButton.previousElementSibling !== loadMoreButton) {
-      loadMoreButton.insertAdjacentElement("afterend", loadAllButton);
-    }
-
-    syncLoadAllButtonState(loadMoreButton, loadAllButton);
   });
 }
 
 function ensureLoadAllButtons() {
-  syncLoadAllButtons();
-
-  if (buttonObserver) {
-    return;
-  }
-
-  buttonObserver = new MutationObserver(() => {
-    if (isPullRequestPage()) {
-      syncLoadAllButtons();
+  try {
+    if (!isPullRequestPage()) {
+      buttonObserver?.disconnect();
+      buttonObserver = null;
+      return;
     }
-  });
 
-  buttonObserver.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ["disabled", "aria-disabled"]
-  });
+    syncLoadAllButtons();
+
+    if (buttonObserver) {
+      return;
+    }
+
+    buttonObserver = new MutationObserver(syncLoadAllButtons);
+    buttonObserver.observe(document.documentElement, OBSERVER_CONFIG);
+  } catch (error) {
+    reportInjectionFailure(error);
+  }
 }
 
 function queueNextAttempt() {
@@ -218,11 +258,18 @@ function tryLoadMore() {
     return;
   }
 
-  if (button.disabled || button.getAttribute("aria-disabled") === "true") {
+  if (isButtonDisabled(button)) {
+    retryAttempts += 1;
+    if (retryAttempts >= MAX_RETRY_ATTEMPTS) {
+      updateTooltip(activeContainer);
+      stopAutoload();
+      return;
+    }
     queueNextAttempt();
     return;
   }
 
+  retryAttempts = 0;
   button.click();
   queueNextAttempt();
 }
@@ -233,6 +280,7 @@ function startAutoload(container) {
   }
 
   activeContainer = container;
+  retryAttempts = 0;
   updateTooltip(activeContainer);
 
   if (!observer) {
@@ -246,12 +294,7 @@ function startAutoload(container) {
     observer.disconnect();
   }
 
-  observer.observe(activeContainer, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ["disabled", "aria-disabled"]
-  });
+  observer.observe(activeContainer, OBSERVER_CONFIG);
 
   tryLoadMore();
 }
@@ -259,34 +302,48 @@ function startAutoload(container) {
 document.addEventListener(
   "click",
   (event) => {
-    if (!isPullRequestPage()) {
-      return;
+    try {
+      if (!isPullRequestPage()) {
+        return;
+      }
+
+      if (!(event.target instanceof Element)) {
+        return;
+      }
+
+      const button = event.target.closest(
+        `[${LOAD_ALL_BUTTON_ATTRIBUTE}="true"]`
+      );
+
+      if (!button) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const form = button.closest(PAGINATION_FORM_SELECTOR);
+      const container = form?.closest(TIMELINE_CONTAINER_SELECTOR);
+      startAutoload(container);
+    } catch (error) {
+      reportInjectionFailure(error);
     }
-
-    if (!(event.target instanceof Element)) {
-      return;
-    }
-
-    const button = event.target.closest(`[${LOAD_ALL_BUTTON_ATTRIBUTE}="true"]`);
-
-    if (!button) {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-
-    const form = button.closest(PAGINATION_FORM_SELECTOR);
-    const container = form?.closest(TIMELINE_CONTAINER_SELECTOR);
-    startAutoload(container);
   },
   true
 );
 
 document.addEventListener("turbo:load", () => {
-  stopAutoload();
-  hideTooltip();
-  ensureLoadAllButtons();
+  try {
+    stopAutoload();
+    hideTooltip();
+    ensureLoadAllButtons();
+  } catch (error) {
+    reportInjectionFailure(error);
+  }
 });
 
-ensureLoadAllButtons();
+try {
+  ensureLoadAllButtons();
+} catch (error) {
+  reportInjectionFailure(error);
+}
